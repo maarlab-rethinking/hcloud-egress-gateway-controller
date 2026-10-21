@@ -68,9 +68,11 @@ watches Nodes and maps a labelled node back to its CR), when an owned StatefulSe
 4. **Ensure the backend object.** The selected backend renders the egress redirect
    ([ADR-0002](decisions/0002-cilium-default-host-routing-fallback.md)). `cilium` server-side-applies
    a `CiliumEgressGatewayPolicy` selecting `spec.podSelector`, with `destinationCIDRs` defaulting to
-   `0.0.0.0/0` minus the cluster-internal ranges, and an `egressGateway.nodeSelector` matching the
-   node label the agents set. `host-routing` renders nothing cluster-level; its data plane is entirely
-   in the agent.
+   `0.0.0.0/0` minus the cluster-internal (IPv4) ranges, and one `egressGateways` entry per floating IP
+   in `egressIP` mode, each `nodeSelector` pinned to the node that owns its address
+   ([ADR-0009](decisions/0009-cilium-egressip-not-interface.md)). Cilium spreads the pods across the
+   entries whose node exists and fails over between them. `host-routing` renders nothing
+   cluster-level; its data plane is entirely in the agent.
 5. **GC node labels and publish status.** Every node labelled `egress.maarlab.dev/gateway=<cr>` is
    checked against the agent pods actually running: a labelled node with no agent pod was recycled
    without graceful cleanup, so its stale `gateway` and `floating-ip` labels are removed. The

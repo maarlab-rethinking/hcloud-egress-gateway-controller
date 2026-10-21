@@ -98,7 +98,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.ensureStatefulSets(ctx, &heg, regions); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure statefulsets: %w", err)
 	}
-	if err := r.ensureBackend(ctx, &heg); err != nil {
+	if err := r.ensureBackend(ctx, &heg, regions); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure backend: %w", err)
 	}
 	if err := r.gcAndStatus(ctx, &heg); err != nil {
@@ -255,8 +255,18 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, heg *egressv1alpha1.
 	return err
 }
 
-func (r *Reconciler) ensureBackend(ctx context.Context, heg *egressv1alpha1.HetznerEgressGateway) error {
-	obj, err := backend.For(heg).Render(heg)
+// ensureBackend renders the backend's egress-redirect object (a single CiliumEgressGatewayPolicy
+// in egressIP mode for the cilium backend; none for host-routing) and server-side applies it.
+// It owns the object with ForceOwnership, so upgrading in place from the older interface-mode
+// policy of the same name drops the stale interface field and installs egressIP instead.
+func (r *Reconciler) ensureBackend(ctx context.Context, heg *egressv1alpha1.HetznerEgressGateway, regions []regionIPs) error {
+	var egressIPs []string
+	for _, reg := range regions {
+		for _, ip := range reg.ips {
+			egressIPs = append(egressIPs, ip.Address)
+		}
+	}
+	obj, err := backend.For(heg).Render(heg, egressIPs)
 	if err != nil || obj == nil {
 		return err
 	}

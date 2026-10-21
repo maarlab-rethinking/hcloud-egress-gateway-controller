@@ -83,11 +83,14 @@ pre-allow-listed addresses instead with `spec.floatingIPs`.
 
 Only the egress redirect is CNI-specific; the floating-IP lifecycle, node assignment, interface and
 labels are not. It is a pluggable backend
-([ADR-0002](docs/decisions/0002-cilium-default-host-routing-fallback.md)): `cilium` (default) renders a
-`CiliumEgressGatewayPolicy` and lets Cilium spread endpoints and SNAT via `interface` mode on `egr0`;
-`host-routing` programs policy routing and `nft` SNAT in the agent itself, for any CNI. Cilium's OSS
-egress gateway is **not topology-aware**, so a pod may egress through another region's gateway — which
-is why every address is allow-listed ([operations](docs/operations.md#regions-and-locality)).
+([ADR-0002](docs/decisions/0002-cilium-default-host-routing-fallback.md)): `cilium` (default) renders
+one `CiliumEgressGatewayPolicy` with a gateway per floating IP, in `egressIP` mode, and lets Cilium do
+the redirect and SNAT, spread the pods across the floating IPs and fail over between them
+([ADR-0009](docs/decisions/0009-cilium-egressip-not-interface.md) says why `egressIP`, not `interface`
+on the `egr0` dummy); `host-routing` programs policy routing and `nft` SNAT in the agent itself, for any
+CNI. Cilium's OSS egress gateway is **not topology-aware**, so a pod may leave through any of the CR's
+floating IPs, whatever its region — which is why every address is allow-listed
+([operations](docs/operations.md#regions-and-locality)).
 
 ## Development
 
