@@ -117,13 +117,14 @@ why every address must be allow-listed. For guaranteed same-region egress, use o
 region-scoped `podSelector` and region-affine workloads.
 
 **Failover is Cilium's.** When a gateway node goes away, its labels leave the node — the agent removes
-them on shutdown, the controller once the node has no agent pod left — and Cilium moves
-that gateway's pods to the remaining ones within seconds. Any change to the set of live gateways
-re-hashes the pods, so some whose gateway did not fail move too, and **their open egress connections
-break** (cilium/cilium#39245); new connections work at once. The floating IP itself moves only when its
-agent pod is rescheduled: at once for a drained node, and for a dead one when its Node object is removed
-(Cluster API remediation); the agent then claims it on another node of its region and the gateway
-rejoins.
+them on shutdown, and the controller as soon as the node stops being `Ready` (an unreachable node turns
+`Unknown` once the node-monitor grace period passes, under a minute by default) or has no agent pod
+left — and Cilium moves that gateway's pods to the remaining ones within seconds. Any change to the set
+of live gateways re-hashes the pods, so some whose gateway did not fail move too, and **their open
+egress connections break** (cilium/cilium#39245); new connections work at once. The floating IP itself
+moves only when its agent pod is rescheduled: at once for a drained node, and for a dead one when its
+Node object is removed (Cluster API remediation); the agent then claims it on another node of its region
+and the gateway rejoins.
 
 ## Opting a workload in
 

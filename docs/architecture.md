@@ -74,9 +74,11 @@ watches Nodes and maps a labelled node back to its CR), when an owned StatefulSe
    entries whose node exists and fails over between them. `host-routing` renders nothing
    cluster-level; its data plane is entirely in the agent.
 5. **GC node labels and publish status.** Every node labelled `egress.maarlab.dev/gateway=<cr>` is
-   checked against the agent pods actually running: a labelled node with no agent pod was recycled
-   without graceful cleanup, so its stale `gateway` and `floating-ip` labels are removed. The
-   survivors become `status.floatingIPs[]` (`address` from the node's `floating-ip` label,
+   checked against the agent pods actually running and its `Ready` condition: a labelled node with no
+   agent pod was recycled without graceful cleanup, and a node that is not `Ready` is dead or
+   unreachable — its agent pod stays bound to it in the API until the Node object goes — so in both
+   cases its `gateway` and `floating-ip` labels are removed, and the policy's other gateways take its
+   pods. The survivors become `status.floatingIPs[]` (`address` from the node's `floating-ip` label,
    `assignedNode`), and `status.readyGateways` their count.
 6. **Requeue after 60 s.**
 
@@ -97,7 +99,9 @@ seconds** (self-heal), and makes the node's state true and idempotent:
    ([ADR-0004](decisions/0004-never-raise-conf-all-rp-filter.md)).
 4. For the `host-routing` backend only, program policy routing + an `nft` SNAT rule to the floating IP
    on the node's default-route uplink.
-5. **Label the node** `egress.maarlab.dev/gateway=<cr>` and `egress.maarlab.dev/floating-ip=<addr>`.
+5. **Label the node** `egress.maarlab.dev/gateway=<cr>` and `egress.maarlab.dev/floating-ip=<addr>` —
+   only while the node is `Ready`; otherwise remove the labels, so the agent agrees with the
+   controller's GC instead of re-adding what it removed every 30 s.
 
 On `SIGTERM` the agent removes the two node labels and deletes `egr0` (best-effort); ungraceful node
 loss is covered by the controller's label GC in step 5 above.

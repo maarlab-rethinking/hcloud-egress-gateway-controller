@@ -72,7 +72,7 @@ type Reconciler struct {
 //     label, never recreated).
 //  2. Ensure the agent StatefulSet (replicas = len(IPs), anti-affinity, ordinal→IP env).
 //  3. Ensure the egress-redirect backend resource (cilium policy / none for host-routing).
-//  4. GC node labels of recycled gateways + publish status from live labels.
+//  4. GC node labels of recycled or not-Ready gateways + publish status from live labels.
 //  5. Finalizer honoring spec.managed.reclaimPolicy on deletion.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
@@ -297,8 +297,13 @@ func (r *Reconciler) gcAndStatus(ctx context.Context, heg *egressv1alpha1.Hetzne
 	var status []egressv1alpha1.FloatingIPStatus
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		if !agentNodes[n.Name] {
-			// Node recycled without graceful cleanup → drop the stale labels.
+		// Drop the labels of a node that is no longer a live gateway: recycled without
+		// graceful cleanup (no agent pod), or not Ready. A dead node's agent pod stays in
+		// the API, bound to it, until the Node object goes, and while the labels stay the
+		// policy keeps sending that gateway's pods into it; removed, Cilium moves them to
+		// the remaining gateways at once. The agent leaves the labels off while its node is
+		// not Ready, and puts them back when it is.
+		if !agentNodes[n.Name] || !names.NodeReady(n) {
 			patch := client.MergeFrom(n.DeepCopy())
 			delete(n.Labels, names.NodeLabelKey)
 			delete(n.Labels, names.FloatingIPLabelKey)

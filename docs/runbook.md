@@ -88,10 +88,10 @@ The egress is working (the IP echo shows a floating IP) but a filtered upstream 
 
 ## A node kept its gateway labels after being drained
 
-A node labelled `egress.maarlab.dev/gateway=<cr>` with no agent pod on it is cleaned up by the
-controller on its next pass (it removes the `gateway` and `floating-ip` labels). If it lingers, the
-controller is not reconciling — check the controller pod is `Running` and is the leader, and
-[force a reconcile](#forcing-a-reconcile).
+A node labelled `egress.maarlab.dev/gateway=<cr>` with no agent pod on it, or that is not `Ready`, is
+cleaned up by the controller on its next pass (it removes the `gateway` and `floating-ip` labels), and
+Cilium moves that gateway's pods to the others. If it lingers, the controller is not reconciling —
+check the controller pod is `Running` and is the leader, and [force a reconcile](#forcing-a-reconcile).
 
 ## Forcing a reconcile
 
