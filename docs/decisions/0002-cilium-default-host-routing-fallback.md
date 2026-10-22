@@ -31,8 +31,8 @@ extension point and needs `nft` in the agent image.
 
 - Adding support for another CNI's egress construct is implementing one `Renderer`; the rest of the
   controller and the agent are reused unchanged.
-- The default path depends on Cilium ≥ 1.18 (`egressGateways`; validated on 1.18–1.20.x) with
-  `egressGateway.enabled: true`, and
+- The default path depends on Cilium ≥ 1.18 (`egressGateways`; validated on 1.18–1.20.x by the
+  datapath e2e, [ADR-0010](0010-cilium-datapath-e2e-matrix.md)) with `egressGateway.enabled: true`, and
   inherits its OSS limitation of not being topology-aware.
 - `cilium` uses Cilium's `egressIP` mode ([ADR-0009](0009-cilium-egressip-not-interface.md)); the
   floating IP still lives on `egr0` ([ADR-0005](0005-egr0-is-a-dummy-interface.md)) as a local source

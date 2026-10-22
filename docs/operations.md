@@ -57,7 +57,7 @@ an existing CR stays valid.
 | Component | Tested |
 |---|---|
 | Kubernetes | 1.36 |
-| Cilium (default backend) | 1.18–1.20.x, egress gateway enabled |
+| Cilium (default backend) | 1.18–1.20.x, egress gateway enabled; the datapath e2e runs the newest patch of each and the next pre-release weekly ([ADR-0010](decisions/0010-cilium-datapath-e2e-matrix.md)) |
 | Talos | SELinux permissive; `dummy` module built in |
 | Hetzner Cloud | floating IPs (IPv4), API token with read/write |
 

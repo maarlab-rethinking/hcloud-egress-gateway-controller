@@ -127,9 +127,13 @@ node that vanished.
 - **Unit tests** run the reconciler against a fake Kubernetes client and a fake Hetzner client:
   managed create/adopt, BYO grouping by location, per-region StatefulSets and their GC, the backend
   renderers, finalizer reclaim, and naming.
+- **The datapath e2e** ([ADR-0010](decisions/0010-cilium-datapath-e2e-matrix.md)) runs the rendered
+  policy against a real Cilium on kind, with simulated gateway nodes and an upstream outside the
+  cluster, and asserts the source IPs the upstream sees: unlabelled pods from their node, labelled pods
+  spread across every floating IP, and failover when a gateway goes away. It runs on every supported
+  Cilium minor and the next pre-release, weekly as well as on changes.
 - **Not covered automatically**: the agent's netlink path (`egr0`, addresses, `nft`) and the real
   Hetzner API client run only on a real node against the real API; they are exercised by deploying,
-  not in CI. The datapath interaction with the CNI — the one that
-  [ADR-0004](decisions/0004-never-raise-conf-all-rp-filter.md) is about — can only be seen on a
-  cluster running the CNI, so the first deploy to a new CNI or Cilium version is the test the suite
-  cannot replace.
+  not in CI (the e2e sets up `egr0` from the shell). Interactions with the rest of a production node —
+  the one [ADR-0004](decisions/0004-never-raise-conf-all-rp-filter.md) is about — and any CNI other
+  than Cilium are still only seen on a real cluster.

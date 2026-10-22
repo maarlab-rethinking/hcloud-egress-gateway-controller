@@ -90,7 +90,9 @@ accepts it as a source and Cilium's node-address lookup finds it, never as a for
 ## Consequences
 
 - Egress is restored on Cilium 1.20.x and is correct on 1.18 and 1.19. The `cilium` backend needs
-  **Cilium ≥ 1.18** (`egressGateways`); interface mode on a dummy must not be reintroduced.
+  **Cilium ≥ 1.18** (`egressGateways`); interface mode on a dummy must not be reintroduced. The datapath
+  e2e ([ADR-0010](0010-cilium-datapath-e2e-matrix.md)) guards the egressIP mode, the spreading and the
+  failover on every supported Cilium minor and the next pre-release.
 - Every floating IP is **active**: the CR's pods are spread across all of them, about evenly by count
   (not by traffic). With the platform's three regions, a pod may leave through another region's IP —
   Cilium's assignment is not topology-aware — which is why every address is allow-listed. Same-region
