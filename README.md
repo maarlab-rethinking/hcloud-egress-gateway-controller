@@ -30,6 +30,7 @@ gateway does the redirect but cannot provision a routable cloud IP;
 - [Runbook](docs/runbook.md): symptom first — a low `readyGateways`, a crashlooping agent, traffic not
   using the floating IP, a gateway node losing connectivity — and what to do about each.
 - [API reference](docs/api.md), generated from the Go types.
+- [Changelog](CHANGELOG.md) and [releasing](RELEASE.md).
 
 ## Install
 
