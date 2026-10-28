@@ -8,6 +8,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -26,11 +29,12 @@ import (
 // fakeHCloud is an in-memory hcloud.Client: EnsureManaged is idempotent by
 // (gateway, location, index) so re-resolving never creates duplicates.
 type fakeHCloud struct {
-	created  map[string]hcloud.FloatingIP
-	byAddr   map[string]hcloud.FloatingIP
-	nextID   int64
-	assigned map[int64]int64
-	deleted  []int64
+	created    map[string]hcloud.FloatingIP
+	byAddr     map[string]hcloud.FloatingIP
+	nextID     int64
+	assigned   map[int64]int64
+	unassigned []int64
+	deleted    []int64
 }
 
 func newFakeHCloud() *fakeHCloud {
@@ -52,6 +56,18 @@ func (f *fakeHCloud) EnsureManaged(_ context.Context, gateway, location string, 
 	return fip, nil
 }
 
+func (f *fakeHCloud) ListManaged(_ context.Context, gateway string) ([]hcloud.FloatingIP, error) {
+	var out []hcloud.FloatingIP
+	for k, v := range f.created {
+		if strings.HasPrefix(k, gateway+"|") {
+			v.AssignedToID = f.assigned[v.ID]
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (f *fakeHCloud) GetByAddress(_ context.Context, address string) (hcloud.FloatingIP, error) {
 	if v, ok := f.byAddr[address]; ok {
 		return v, nil
@@ -64,8 +80,19 @@ func (f *fakeHCloud) Assign(_ context.Context, ipID, serverID int64) error {
 	return nil
 }
 
+func (f *fakeHCloud) Unassign(_ context.Context, ipID int64) error {
+	delete(f.assigned, ipID)
+	f.unassigned = append(f.unassigned, ipID)
+	return nil
+}
+
 func (f *fakeHCloud) Delete(_ context.Context, ipID int64) error {
 	f.deleted = append(f.deleted, ipID)
+	for k, v := range f.created {
+		if v.ID == ipID {
+			delete(f.created, k)
+		}
+	}
 	return nil
 }
 
@@ -231,15 +258,123 @@ func TestFinalizeHonorsReclaimPolicy(t *testing.T) {
 		t.Fatalf("Retain must not delete IPs, deleted: %v", fhRetain.deleted)
 	}
 
-	// Delete: release every region's floating IP.
+	// Delete: release every managed floating IP of the gateway, including one a lowered
+	// spec no longer asks for (hel1 here), but not another gateway's.
 	fhDelete := newFakeHCloud()
 	hegDelete := newHEG(egressv1alpha1.ReclaimDelete)
+	for _, loc := range []string{"nbg1", "fsn1", "hel1"} {
+		_, _ = fhDelete.EnsureManaged(context.Background(), "gw", loc, 0, "", nil)
+	}
+	other, _ := fhDelete.EnsureManaged(context.Background(), "other", "nbg1", 0, "", nil)
 	if err := newTestReconciler(fhDelete, hegDelete).finalize(context.Background(), hegDelete); err != nil {
 		t.Fatal(err)
 	}
-	if len(fhDelete.deleted) != 2 {
-		t.Fatalf("Delete must release 2 IPs, deleted: %v", fhDelete.deleted)
+	if len(fhDelete.deleted) != 3 || slices.Contains(fhDelete.deleted, other.ID) {
+		t.Fatalf("Delete must release the gateway's 3 IPs and no other, deleted: %v", fhDelete.deleted)
 	}
+}
+
+func TestReleaseSurplusIPs(t *testing.T) {
+	ctx := context.Background()
+	newHEG := func(policy egressv1alpha1.ReclaimPolicy, regions ...egressv1alpha1.ManagedRegion) *egressv1alpha1.HetznerEgressGateway {
+		return &egressv1alpha1.HetznerEgressGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "gw"},
+			Spec: egressv1alpha1.HetznerEgressGatewaySpec{
+				Managed: &egressv1alpha1.ManagedFloatingIPs{ReclaimPolicy: policy, Regions: regions},
+			},
+		}
+	}
+	// A gateway that had nbg1 x2, fsn1 and hel1, all assigned to gateway nodes.
+	seed := func() (*fakeHCloud, map[string]hcloud.FloatingIP) {
+		fh := newFakeHCloud()
+		ips := map[string]hcloud.FloatingIP{}
+		for _, k := range []struct {
+			loc string
+			i   int
+		}{{"nbg1", 0}, {"nbg1", 1}, {"fsn1", 0}, {"hel1", 0}} {
+			fip, _ := fh.EnsureManaged(ctx, "gw", k.loc, k.i, "", nil)
+			fh.assigned[fip.ID] = 100 + fip.ID
+			ips[fmt.Sprintf("%s-%d", k.loc, k.i)] = fip
+		}
+		return fh, ips
+	}
+
+	t.Run("Retain unassigns and reports what the spec dropped", func(t *testing.T) {
+		fh, ips := seed()
+		// fsn1 and hel1 removed, nbg1 lowered from 2 to 1.
+		heg := newHEG(egressv1alpha1.ReclaimRetain, egressv1alpha1.ManagedRegion{Location: "nbg1", Count: 1})
+		r := newTestReconciler(fh, heg)
+		regions, err := r.resolveIPs(ctx, heg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.releaseSurplusIPs(ctx, heg, regions); err != nil {
+			t.Fatal(err)
+		}
+		if len(fh.deleted) != 0 {
+			t.Fatalf("Retain must not delete, deleted: %v", fh.deleted)
+		}
+		if _, ok := fh.assigned[ips["nbg1-0"].ID]; !ok {
+			t.Fatal("the address still in the spec was unassigned")
+		}
+		want := []string{ips["nbg1-1"].Address, ips["fsn1-0"].Address, ips["hel1-0"].Address}
+		if !slices.Equal(heg.Status.RetainedFloatingIPs, want) {
+			t.Fatalf("retainedFloatingIPs = %v, want %v", heg.Status.RetainedFloatingIPs, want)
+		}
+		for _, k := range []string{"nbg1-1", "fsn1-0", "hel1-0"} {
+			if _, ok := fh.assigned[ips[k].ID]; ok {
+				t.Fatalf("%s is still assigned", k)
+			}
+		}
+
+		// A second pass changes nothing: the retained addresses are already unassigned.
+		fh.unassigned = nil
+		if err := r.releaseSurplusIPs(ctx, heg, regions); err != nil {
+			t.Fatal(err)
+		}
+		if len(fh.unassigned) != 0 || len(heg.Status.RetainedFloatingIPs) != 3 {
+			t.Fatalf("second pass: unassigned %v, retained %v", fh.unassigned, heg.Status.RetainedFloatingIPs)
+		}
+
+		// Asking for hel1 again re-adopts its address, which leaves the retained list.
+		heg.Spec.Managed.Regions = append(heg.Spec.Managed.Regions, egressv1alpha1.ManagedRegion{Location: "hel1", Count: 1})
+		regions, _ = r.resolveIPs(ctx, heg)
+		if err := r.releaseSurplusIPs(ctx, heg, regions); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(heg.Status.RetainedFloatingIPs, ips["hel1-0"].Address) {
+			t.Fatalf("re-adopted hel1 still listed as retained: %v", heg.Status.RetainedFloatingIPs)
+		}
+	})
+
+	t.Run("Delete deletes what the spec dropped", func(t *testing.T) {
+		fh, ips := seed()
+		heg := newHEG(egressv1alpha1.ReclaimDelete, egressv1alpha1.ManagedRegion{Location: "nbg1", Count: 1})
+		r := newTestReconciler(fh, heg)
+		regions, _ := r.resolveIPs(ctx, heg)
+		if err := r.releaseSurplusIPs(ctx, heg, regions); err != nil {
+			t.Fatal(err)
+		}
+		want := []int64{ips["nbg1-1"].ID, ips["fsn1-0"].ID, ips["hel1-0"].ID}
+		if !slices.Equal(fh.deleted, want) {
+			t.Fatalf("deleted = %v, want %v", fh.deleted, want)
+		}
+		if len(heg.Status.RetainedFloatingIPs) != 0 {
+			t.Fatalf("Delete retains nothing, got %v", heg.Status.RetainedFloatingIPs)
+		}
+	})
+
+	t.Run("BYO addresses are never touched", func(t *testing.T) {
+		// Even a labelled address from an earlier managed spec stays as it is.
+		fh, _ := seed()
+		heg := &egressv1alpha1.HetznerEgressGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw"}}
+		if err := newTestReconciler(fh, heg).releaseSurplusIPs(ctx, heg, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(fh.unassigned)+len(fh.deleted) != 0 {
+			t.Fatalf("BYO touched: unassigned %v, deleted %v", fh.unassigned, fh.deleted)
+		}
+	})
 }
 
 func TestGCAndStatusDropsStaleNodeLabelsAndReports(t *testing.T) {

@@ -72,8 +72,10 @@ type Reconciler struct {
 //     label, never recreated).
 //  2. Ensure the agent StatefulSet (replicas = len(IPs), anti-affinity, ordinal→IP env).
 //  3. Ensure the egress-redirect backend resource (cilium policy / none for host-routing).
-//  4. GC node labels of recycled or not-Ready gateways + publish status from live labels.
-//  5. Finalizer honoring spec.managed.reclaimPolicy on deletion.
+//  4. Release the managed floating IPs the spec no longer asks for: unassign them
+//     (Retain) or delete them (Delete).
+//  5. GC node labels of recycled or not-Ready gateways + publish status from live labels.
+//  6. Finalizer honoring spec.managed.reclaimPolicy on deletion.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
@@ -100,6 +102,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	if err := r.ensureBackend(ctx, &heg, regions); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure backend: %w", err)
+	}
+	if err := r.releaseSurplusIPs(ctx, &heg, regions); err != nil {
+		return ctrl.Result{}, fmt.Errorf("release surplus floating IPs: %w", err)
 	}
 	if err := r.gcAndStatus(ctx, &heg); err != nil {
 		return ctrl.Result{}, err
@@ -277,6 +282,54 @@ func (r *Reconciler) ensureBackend(ctx context.Context, heg *egressv1alpha1.Hetz
 		client.FieldOwner("hcloud-egress-gateway-controller"), client.ForceOwnership)
 }
 
+// releaseSurplusIPs handles the managed floating IPs labelled for this gateway that the
+// spec no longer asks for, after the backend has stopped routing through them. Deleting
+// the agent StatefulSet of a removed region does not detach its address, which would
+// stay assigned to the old gateway node and keep the node looking like an egress host to
+// Hetzner. With Retain the address is unassigned and listed in
+// status.retainedFloatingIPs, for someone to delete in Hetzner (and from the allow-list)
+// or to ask for again; with Delete it is deleted. BYO addresses are never touched: the
+// controller did not create them.
+func (r *Reconciler) releaseSurplusIPs(ctx context.Context, heg *egressv1alpha1.HetznerEgressGateway, regions []regionIPs) error {
+	m := heg.Spec.Managed
+	if m == nil {
+		heg.Status.RetainedFloatingIPs = nil
+		return nil
+	}
+	wanted := map[int64]bool{}
+	for _, reg := range regions {
+		for _, ip := range reg.ips {
+			wanted[ip.ID] = true
+		}
+	}
+	managed, err := r.HCloud.ListManaged(ctx, heg.Name)
+	if err != nil {
+		return err
+	}
+	var retained []string
+	for _, fip := range managed {
+		if wanted[fip.ID] {
+			continue
+		}
+		if m.ReclaimPolicy == egressv1alpha1.ReclaimDelete {
+			if err := r.HCloud.Delete(ctx, fip.ID); err != nil {
+				return err
+			}
+			log.FromContext(ctx).Info("deleted floating IP no longer in spec", "address", fip.Address)
+			continue
+		}
+		if fip.AssignedToID != 0 {
+			if err := r.HCloud.Unassign(ctx, fip.ID); err != nil {
+				return err
+			}
+			log.FromContext(ctx).Info("unassigned floating IP no longer in spec; retained in Hetzner", "address", fip.Address)
+		}
+		retained = append(retained, fip.Address)
+	}
+	heg.Status.RetainedFloatingIPs = retained
+	return nil
+}
+
 func (r *Reconciler) gcAndStatus(ctx context.Context, heg *egressv1alpha1.HetznerEgressGateway) error {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes, client.MatchingLabels{names.NodeLabelKey: heg.Name}); err != nil {
@@ -327,16 +380,16 @@ func (r *Reconciler) finalize(ctx context.Context, heg *egressv1alpha1.HetznerEg
 	if !controllerutil.ContainsFinalizer(heg, names.Finalizer) {
 		return nil
 	}
+	// Delete removes every managed address labelled for the gateway, including those a
+	// lowered spec had already retained, not just the ones it asks for now.
 	if m := heg.Spec.Managed; m != nil && m.ReclaimPolicy == egressv1alpha1.ReclaimDelete {
-		for _, reg := range m.Regions {
-			for i := 0; i < reg.Count; i++ {
-				fip, err := r.HCloud.EnsureManaged(ctx, heg.Name, reg.Location, i, m.Type, m.Labels)
-				if err != nil {
-					return err
-				}
-				if err := r.HCloud.Delete(ctx, fip.ID); err != nil {
-					return err
-				}
+		managed, err := r.HCloud.ListManaged(ctx, heg.Name)
+		if err != nil {
+			return err
+		}
+		for _, fip := range managed {
+			if err := r.HCloud.Delete(ctx, fip.ID); err != nil {
+				return err
 			}
 		}
 	}

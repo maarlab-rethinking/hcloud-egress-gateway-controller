@@ -148,6 +148,13 @@ type HetznerEgressGatewayStatus struct {
 	// +optional
 	ReadyGateways int `json:"readyGateways,omitempty"`
 
+	// RetainedFloatingIPs are managed addresses the spec no longer asks for (a region
+	// removed, or a count lowered) that reclaimPolicy Retain keeps in Hetzner, unassigned
+	// and billed. Delete them in Hetzner and from the upstream allow-list, or ask for them
+	// again in the spec, which re-adopts them.
+	// +optional
+	RetainedFloatingIPs []string `json:"retainedFloatingIPs,omitempty"`
+
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

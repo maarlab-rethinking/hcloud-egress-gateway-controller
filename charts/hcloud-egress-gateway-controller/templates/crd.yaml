@@ -285,6 +285,15 @@ spec:
                 description: ReadyGateways is the count of floating IPs currently
                   assigned to a healthy node.
                 type: integer
+              retainedFloatingIPs:
+                description: |-
+                  RetainedFloatingIPs are managed addresses the spec no longer asks for (a region
+                  removed, or a count lowered) that reclaimPolicy Retain keeps in Hetzner, unassigned
+                  and billed. Delete them in Hetzner and from the upstream allow-list, or ask for them
+                  again in the spec, which re-adopts them.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

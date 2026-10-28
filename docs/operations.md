@@ -20,6 +20,10 @@ or `len(spec.floatingIPs)`. Equal means every requested source IP is up.
 upstream.** There are no `Ready`-style conditions; the gap between wanted and ready, plus the agent
 pods, is the whole picture. The [runbook](runbook.md) works from that gap.
 
+`status.retainedFloatingIPs` lists the managed addresses the spec no longer asks for that
+`reclaimPolicy: Retain` keeps in Hetzner ([below](#lowering-the-spec)). They carry no traffic but are
+still billed.
+
 ## Metrics
 
 The controller serves controller-runtime's own metrics on `--metrics-bind-address` (`:8080` by
@@ -101,8 +105,24 @@ floating IPs:
 - **`Delete`** removes them. Ephemeral and test gateways only; never for an address an upstream filters
   on.
 
-The finalizer `egress.maarlab.dev/finalizer` also strips the `gateway`/`floating-ip` node labels on
+With `Delete`, the finalizer deletes every managed address labelled for the CR, including those a
+lowered spec had already retained. It also strips the `gateway`/`floating-ip` node labels on
 deletion, so a CR never leaves a node looking like a gateway.
+
+### Lowering the spec
+
+Removing a region from `spec.managed.regions`, or lowering its `count`, drops the addresses the spec
+no longer asks for: the policy stops routing through them and their agents go. The controller then
+releases them by the same `reclaimPolicy`:
+
+- **`Retain`** unassigns each one from its old gateway node and lists it in
+  `status.retainedFloatingIPs`. It stays in Hetzner, billed, so you can delete it in the Hetzner
+  Console and remove it from the upstream allow-list — or ask for it again: putting the region (or
+  the count) back re-adopts the same address by label.
+- **`Delete`** deletes each one.
+
+A lowered `count` drops the highest indexes of the region (`<cr>-<location>-<index>`), never the
+lower ones.
 
 ## Regions and locality
 
@@ -151,4 +171,5 @@ With `reclaimPolicy: Retain`, deleting the CR leaves the floating IPs, so moving
 cluster is: create the CR there with the same name and regions (it re-adopts the IPs by label), then
 delete the old one. To retire a gateway for good, set `reclaimPolicy: Delete` before deleting the CR,
 or delete the CR and then remove the floating IPs in the Hetzner Console — and remove the addresses
-from the upstream allow-list.
+from the upstream allow-list. To retire one region of a gateway, see
+[lowering the spec](#lowering-the-spec).

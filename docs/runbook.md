@@ -1,9 +1,9 @@
 # Runbook
 
 Symptom first, then what to look at, then what to do. There are no status conditions to read; the
-signals are `status.readyGateways` against the count you asked for, `status.floatingIPs[]`, the agent
-pods, and the node labels. The controller log is in the namespace it runs in (`egress-system`); each
-agent logs on its own node.
+signals are `status.readyGateways` against the count you asked for, `status.floatingIPs[]`,
+`status.retainedFloatingIPs`, the agent pods, and the node labels. The controller log is in the
+namespace it runs in (`egress-system`); each agent logs on its own node.
 
 ```console
 kubectl get hetzneregressgateway <name> -o yaml | yq '.status'
@@ -85,6 +85,14 @@ The egress is working (the IP echo shows a floating IP) but a filtered upstream 
   `status.floatingIPs[]`, not just one.
 - **The address changed.** Managed IPs are stable and re-adopted by label, so this only happens if the
   CR was deleted with `reclaimPolicy: Delete` and recreated, minting new addresses. Use `Retain`.
+
+## Floating IPs you no longer use are still billed
+
+`status.retainedFloatingIPs` lists them: a region was removed from the spec, or its `count` lowered,
+under `reclaimPolicy: Retain`. The controller has unassigned them; it never deletes them under
+`Retain` ([operations](operations.md#lowering-the-spec)). Delete them in the Hetzner Console and
+remove them from the upstream allow-list. If one is still assigned to a server, the controller has
+not reconciled since the spec changed, or the token lacks floating-IP write: check the controller log.
 
 ## A node kept its gateway labels after being drained
 

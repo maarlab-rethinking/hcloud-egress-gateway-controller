@@ -73,16 +73,22 @@ watches Nodes and maps a labelled node back to its CR), when an owned StatefulSe
    ([ADR-0009](decisions/0009-cilium-egressip-not-interface.md)). Cilium spreads the pods across the
    entries whose node exists and fails over between them. `host-routing` renders nothing
    cluster-level; its data plane is entirely in the agent.
-5. **GC node labels and publish status.** Every node labelled `egress.maarlab.dev/gateway=<cr>` is
+5. **Release the floating IPs the spec dropped.** In managed mode, `ListManaged` lists every Hetzner
+   floating IP labelled for the CR, whatever its region and index. One the spec no longer asks for —
+   its region removed, or its index at or above a lowered `count` — is no longer routed through (step
+   4 already left it out), but deleting its StatefulSet did not detach it: it would stay assigned to
+   the old gateway node. With `reclaimPolicy: Retain` it is **unassigned** and listed in
+   `status.retainedFloatingIPs`; with `Delete` it is **deleted**. BYO addresses are never touched.
+6. **GC node labels and publish status.** Every node labelled `egress.maarlab.dev/gateway=<cr>` is
    checked against the agent pods actually running and its `Ready` condition: a labelled node with no
    agent pod was recycled without graceful cleanup, and a node that is not `Ready` is dead or
    unreachable — its agent pod stays bound to it in the API until the Node object goes — so in both
    cases its `gateway` and `floating-ip` labels are removed, and the policy's other gateways take its
    pods. The survivors become `status.floatingIPs[]` (`address` from the node's `floating-ip` label,
    `assignedNode`), and `status.readyGateways` their count.
-6. **Requeue after 60 s.**
+7. **Requeue after 60 s.**
 
-Steps 2 and 4 are the controller's only writes to Hetzner and to the backend; steps 3 and 5 are its
+Steps 2, 4 and 5 are the controller's only writes to Hetzner and to the backend; steps 3 and 6 are its
 only writes to Kubernetes besides the CR's status and finalizer. It creates no ConfigMaps, Services or
 Secrets.
 
@@ -104,7 +110,9 @@ seconds** (self-heal), and makes the node's state true and idempotent:
    controller's GC instead of re-adding what it removed every 30 s.
 
 On `SIGTERM` the agent removes the two node labels and deletes `egr0` (best-effort); ungraceful node
-loss is covered by the controller's label GC in step 5 above.
+loss is covered by the controller's label GC in step 6 above. The agent never unassigns its floating
+IP on the way out: a rolling restart or a drain would otherwise drop the address it is about to claim
+again, and a region that leaves the spec is released by the controller in step 5.
 
 ## Status, not conditions
 
@@ -114,7 +122,8 @@ agent — against the number you asked for (`sum(regions[].count)` or `len(float
 match, every requested source IP is up; when `readyGateways` is lower, some region's agent has not
 yet claimed its IP, and `status.floatingIPs[].assignedNode` shows which are placed. The addresses to
 allow-list upstream are in `status.floatingIPs[].address`. The [runbook](runbook.md) reads the gap
-between wanted and ready.
+between wanted and ready. **`status.retainedFloatingIPs`** lists the managed addresses the spec no
+longer asks for that `Retain` keeps in Hetzner, unassigned and still billed.
 
 ## Failure philosophy
 
@@ -123,14 +132,15 @@ and losing it is worse than an orphaned IP ([ADR-0006](decisions/0006-managed-fl
 It does not run its own egress datapath, SNAT engine or overlay; it delegates the redirect to the CNI
 and only guarantees that a stable, cloud-provisioned IP is live on a node and that the node is
 labelled ([ADR-0001](decisions/0001-floating-ip-controller-not-datapath.md)). What it does without
-asking is re-assign a floating IP after its node is recycled and drop node labels left behind by a
-node that vanished.
+asking is re-assign a floating IP after its node is recycled, drop node labels left behind by a
+node that vanished, and unassign an address the spec no longer asks for. Deleting one is left to you
+under `Retain`.
 
 ## What the tests cover, and cannot
 
 - **Unit tests** run the reconciler against a fake Kubernetes client and a fake Hetzner client:
   managed create/adopt, BYO grouping by location, per-region StatefulSets and their GC, the backend
-  renderers, finalizer reclaim, and naming.
+  renderers, the release of addresses a lowered spec dropped, finalizer reclaim, and naming.
 - **The datapath e2e** ([ADR-0010](decisions/0010-cilium-datapath-e2e-matrix.md)) runs the rendered
   policy against a real Cilium on kind, with simulated gateway nodes and an upstream outside the
   cluster, and asserts the source IPs the upstream sees: unlabelled pods from their node, labelled pods
