@@ -37,8 +37,10 @@ type FloatingIP struct {
 // Client is the Hetzner Cloud surface this project uses.
 type Client interface {
 	EnsureManaged(ctx context.Context, gateway, location string, index int, ipType string, labels map[string]string) (FloatingIP, error)
+	ListManaged(ctx context.Context, gateway string) ([]FloatingIP, error)
 	GetByAddress(ctx context.Context, address string) (FloatingIP, error)
 	Assign(ctx context.Context, ipID, serverID int64) error
+	Unassign(ctx context.Context, ipID int64) error
 	Delete(ctx context.Context, ipID int64) error
 }
 
@@ -113,6 +115,23 @@ func (a *apiClient) EnsureManaged(ctx context.Context, gateway, location string,
 	return toView(res.FloatingIP), nil
 }
 
+// ListManaged returns every floating IP labelled as managed for the gateway, whatever
+// its region and index: those the spec still asks for and those it no longer does.
+func (a *apiClient) ListManaged(ctx context.Context, gateway string) ([]FloatingIP, error) {
+	all, err := a.c.FloatingIP.AllWithOpts(ctx, hcloudapi.FloatingIPListOpts{
+		ListOpts: hcloudapi.ListOpts{LabelSelector: fmt.Sprintf("%s==%s,%s==%s",
+			LabelManagedBy, ManagedByValue, LabelGateway, gateway)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list floating IPs: %w", err)
+	}
+	out := make([]FloatingIP, 0, len(all))
+	for _, fip := range all {
+		out = append(out, toView(fip))
+	}
+	return out, nil
+}
+
 func (a *apiClient) GetByAddress(ctx context.Context, address string) (FloatingIP, error) {
 	all, err := a.c.FloatingIP.All(ctx)
 	if err != nil {
@@ -141,6 +160,22 @@ func (a *apiClient) Assign(ctx context.Context, ipID, serverID int64) error {
 	action, _, err := a.c.FloatingIP.Assign(ctx, fip, &hcloudapi.Server{ID: serverID})
 	if err != nil {
 		return fmt.Errorf("assign floating IP %d to server %d: %w", ipID, serverID, err)
+	}
+	return a.c.Action.WaitFor(ctx, action)
+}
+
+// Unassign detaches the floating IP from its server. Idempotent: a no-op if unassigned.
+func (a *apiClient) Unassign(ctx context.Context, ipID int64) error {
+	fip, _, err := a.c.FloatingIP.GetByID(ctx, ipID)
+	if err != nil {
+		return fmt.Errorf("get floating IP %d: %w", ipID, err)
+	}
+	if fip == nil || fip.Server == nil {
+		return nil
+	}
+	action, _, err := a.c.FloatingIP.Unassign(ctx, fip)
+	if err != nil {
+		return fmt.Errorf("unassign floating IP %d: %w", ipID, err)
 	}
 	return a.c.Action.WaitFor(ctx, action)
 }

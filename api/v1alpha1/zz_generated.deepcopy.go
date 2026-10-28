@@ -127,6 +127,11 @@ func (in *HetznerEgressGatewayStatus) DeepCopyInto(out *HetznerEgressGatewayStat
 		*out = make([]FloatingIPStatus, len(*in))
 		copy(*out, *in)
 	}
+	if in.RetainedFloatingIPs != nil {
+		in, out := &in.RetainedFloatingIPs, &out.RetainedFloatingIPs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))
