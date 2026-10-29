@@ -94,6 +94,8 @@ floating IPs, whatever its region — which is why every address is allow-listed
 
 ## Development
 
+How to propose a change, and how it is checked and merged: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ```console
 make test                        # unit tests (fake client + fake hcloud)
 make lint vet helm-lint
